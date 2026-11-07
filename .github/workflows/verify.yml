@@ -44,6 +44,9 @@ jobs:
       - run: npm ci --registry=https://registry.npmjs.org
       - run: npm test
       - run: npm run build
+      - name: Record macOS registry availability
+        if: runner.os == 'macOS'
+        run: node -e 'const {execFileSync}=require("node:child_process"); const text=execFileSync("/usr/sbin/ioreg",["-a","-l","-r","-c","IOPortTransportComponentCCUSBPDSOPp"],{encoding:"utf8"}); console.log(JSON.stringify({registryOutputBytes:Buffer.byteLength(text),empty:!text.trim()}));'
       - name: Build Windows candidate
         if: runner.os == 'Windows'
         run: npx electron-builder --win portable --x64 --publish never

@@ -1,7 +1,7 @@
 {
   "name": "cablewise",
   "productName": "Cablewise",
-  "version": "0.3.0-rc.2",
+  "version": "0.3.0-rc.3",
   "private": true,
   "description": "线知 — 面向普通人的线材与连接检查工具",
   "author": "Cablewise",

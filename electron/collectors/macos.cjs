@@ -28,12 +28,17 @@ function parseMacIdentities(tree) {
       deviceName: null }];
   });
 }
-async function scanMac() {
-  const { stdout } = await execute('/usr/sbin/ioreg', ['-a', '-l', '-r', '-c', 'IOPortTransportComponentCCUSBPDSOPp'], { timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
-  const cables = parseMacIdentities(plist.parse(stdout));
+async function scanMac(run = execute) {
+  const { stdout } = await run('/usr/sbin/ioreg', ['-a', '-l', '-r', '-c', 'IOPortTransportComponentCCUSBPDSOPp'], { timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
+  // ioreg can exit successfully with no output when this registry class has
+  // no matching entries. Only that empty result is normal; malformed XML and
+  // command failures must still surface instead of pretending no cable exists.
+  const cables = stdout.trim() ? parseMacIdentities(plist.parse(stdout)) : [];
   return { platform: 'macOS', cables, capabilities: {
     singleEnded: 'conditional', emarker: 'conditional', nativeCollector: 'IORegistry',
-    message: '正在读取 Mac 开放的线材芯片信息。未出现的线可先换 USB-C 端口，或将另一端接入设备后重试。'
+    message: cables.length
+      ? '已读取 Mac 开放的线材芯片信息。未出现的线可先换 USB-C 端口，或将另一端接入设备后重试。'
+      : '未读取到线材芯片信息。可尝试换 USB-C 端口、接入另一端设备，或手动登记线材；空结果不能确认线材是否带芯片。'
   }, scannedAt: new Date().toISOString() };
 }
 module.exports = { scanMac, parseMacIdentities };
