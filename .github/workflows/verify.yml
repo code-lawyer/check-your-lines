@@ -1,0 +1,93 @@
+name: Verify desktop candidates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            label: Windows x64
+            arch: x64
+          - os: macos-15
+            label: macOS arm64
+            arch: arm64
+          - os: macos-15-intel
+            label: macOS x64
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.16.0'
+          cache: npm
+      - run: npm ci --registry=https://registry.npmjs.org
+      - run: npm test
+      - run: npm run build
+      - name: Build Windows candidate
+        if: runner.os == 'Windows'
+        run: npx electron-builder --win portable --x64 --publish never
+      - name: Build macOS candidate
+        if: runner.os == 'macOS'
+        run: npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
+      - name: Verify packaged Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CABLEWISE_TEST_EXE=(Resolve-Path 'release/win-unpacked/Cablewise.exe').Path
+          node tests/catalog-smoke.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/recovery-smoke.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/compatibility-smoke.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/portable-smoke.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/verify-windows-package.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify packaged macOS application
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          suffix=''
+          if [ "$TARGET_ARCH" = 'arm64' ]; then suffix='-arm64'; fi
+          export CABLEWISE_TEST_EXE="$PWD/release/mac${suffix}/Cablewise.app/Contents/MacOS/Cablewise"
+          node tests/catalog-smoke.cjs
+          node tests/recovery-smoke.cjs
+          shasum -a 256 release/*.dmg > release/macos-checksums.sha256
+      - name: Upload verified candidate files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.sha256
+            release/*package-verification.json
+          if-no-files-found: error
+          retention-days: 14
+
+# Hosted runners verify builds and application flows. They do not have the
+# user's physical cables and cannot establish e-marker/hardware compatibility.

@@ -1,0 +1,47 @@
+const {_electron:electron}=require('playwright');
+const fs=require('node:fs/promises');
+const path=require('node:path');
+const assert=require('node:assert/strict');
+const {createCatalogStore}=require('../electron/catalog-store.cjs');
+(async()=>{
+  const root=path.resolve(__dirname,'..'),dir=path.join(root,'test-results/recovery-ui');await fs.mkdir(dir,{recursive:true});
+  const profile=await fs.mkdtemp(path.join(dir,'profile-')),file=path.join(profile,'cable-catalog.json');
+  const record={id:'recovery-ui-fixture',name:'备份中的测试线材',evidence:'manual',presence:'manual',kind:'unknown',photoDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4f8AAAAASUVORK5CYII='};
+  const store=createCatalogStore(profile);await store.save([record]);await store.save([{...record,name:'后来改名的测试线材'}]);
+  await fs.writeFile(file,'{"damaged":');const backup=await fs.readFile(file+'.bak','utf8');
+  const env={...process.env,CABLEWISE_TEST_HIDE:'1'};delete env.ELECTRON_RUN_AS_NODE;
+  const exe=process.env.CABLEWISE_TEST_EXE,launch=()=>electron.launch({...(exe?{executablePath:exe}:{}),args:[...(exe?[]:[root]),'--user-data-dir='+profile],env});
+  let app=await launch();const errors=[];
+  try {
+    assert.equal(path.resolve(await app.evaluate(({app})=>app.getPath('userData'))),path.resolve(profile));
+    let page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));
+    await page.getByRole('button',{name:'恢复上一版备份',exact:true}).waitFor();
+    await page.setViewportSize({width:720,height:1000});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await page.screenshot({path:path.join(dir,'recovery-offer.png'),fullPage:true});
+    await page.getByRole('button',{name:'恢复上一版备份',exact:true}).click();
+    await page.getByRole('heading',{name:record.name,exact:true}).first().waitFor();
+    assert.equal(await page.locator('.cable-photo').count(),1);assert.equal(await page.locator('.catalog-error').count(),0);
+    assert.equal(await fs.readFile(file+'.bak','utf8'),backup);
+    await app.close();app=null;await fs.writeFile(file,'{"damaged-again":');
+    app=await launch();page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));
+    await page.getByRole('button',{name:'选择 JSON 备份恢复',exact:true}).waitFor();
+    await page.getByLabel('选择恢复用的 JSON 备份').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from('{"app":"Cablewise","records":[{"id":"x","name":""}]}')});
+    await page.getByRole('alert').getByText('记录缺少名称或编号',{exact:true}).waitFor();
+    assert.equal(await fs.readFile(file,'utf8'),'{"damaged-again":');
+    const {buildExport}=await import('../shared/exports.mjs');
+    const imported={...record,name:'从导出备份找回的线材'};
+    await page.getByLabel('选择恢复用的 JSON 备份').setInputFiles({name:'valid.json',mimeType:'application/json',buffer:Buffer.from(buildExport([imported]))});
+    await page.getByRole('heading',{name:imported.name,exact:true}).first().waitFor();
+    assert.equal((await page.evaluate(()=>window.cablewise.loadCatalog())).records[0].photoDataUrl,record.photoDataUrl);
+    const retained=await fs.readdir(path.join(profile,'recovery'));assert.equal(retained.length,2);
+    const contents=await Promise.all(retained.map(f=>fs.readFile(path.join(profile,'recovery',f),'utf8')));
+    assert(contents.includes('{"damaged":'));assert(contents.includes('{"damaged-again":'));
+    assert.equal(await fs.readFile(file+'.bak','utf8'),backup);
+    await page.screenshot({path:path.join(dir,'recovered.png'),fullPage:true});
+    await app.close();app=await launch();page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));
+    await page.getByRole('button',{name:/^我的线材/}).click();
+    await page.getByRole('heading',{name:imported.name,exact:true}).first().waitFor();
+    assert.equal(await page.locator('.cable-photo').count(),1);assert.deepEqual(errors,[]);
+    console.log(JSON.stringify({status:'PASS',runtime:exe?'packaged':'development',tests:['damaged catalog recovery','valid backup retained','invalid import rejected','JSON recovery','photos','original bytes retained','restart','narrow recovery UI']}));
+  } finally {if(app) await app.close();}
+})().catch(e=>{console.error(e);process.exitCode=1});
