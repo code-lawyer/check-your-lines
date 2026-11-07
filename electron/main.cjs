@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { pathToFileURL } = require('node:url');
+const { isTrustedSender } = require('./sender-validation.cjs');
 const brandRules = import('../shared/brands.mjs');
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
@@ -10,7 +10,7 @@ let inFlight;
 let diagnosis;
 const uiPath = path.join(__dirname, '..', 'dist', 'index.html');
 function validSender(event) {
-  return event.sender === window?.webContents && event.senderFrame?.url.split('#')[0] === pathToFileURL(uiPath).href;
+  return isTrustedSender(event, window?.webContents, uiPath);
 }
 async function scan() {
   if(diagnosis) await diagnosis;
